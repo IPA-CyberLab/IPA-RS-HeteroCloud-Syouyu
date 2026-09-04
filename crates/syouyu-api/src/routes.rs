@@ -114,6 +114,11 @@ pub trait Repository: Send + Sync {
         response: &StoredHttpResponse,
         audit: &AuditEvent,
     ) -> Result<(), StoreError>;
+    async fn renew_operation(
+        &self,
+        operation: &OperationRequest,
+        operation_id: Uuid,
+    ) -> Result<(), StoreError>;
     async fn fail_operation(
         &self,
         operation: &OperationRequest,
@@ -237,6 +242,14 @@ impl Repository for PgStore {
         PgStore::complete_revoke_credential(self, command, operation_id, response, audit).await
     }
 
+    async fn renew_operation(
+        &self,
+        operation: &OperationRequest,
+        operation_id: Uuid,
+    ) -> Result<(), StoreError> {
+        PgStore::renew_operation(self, operation, operation_id).await
+    }
+
     async fn fail_operation(
         &self,
         operation: &OperationRequest,
@@ -297,6 +310,7 @@ pub struct AppState {
     pub garage: Arc<dyn Garage>,
     pub provider_auth: ProviderAuthenticator,
     pub principal_auth: PrincipalAuthenticator,
+    pub storage_region: Arc<str>,
     pub s3_endpoint: Url,
 }
 
@@ -517,6 +531,12 @@ async fn reconcile_service_instance(
         .spec
         .validate()
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    if request.spec.region != state.storage_region.as_ref() {
+        return Err(ApiError::bad_request(format!(
+            "region must match the configured storage region {}",
+            state.storage_region
+        )));
+    }
     let generation = request.generation;
     let operation = OperationRequest {
         idempotency_key: claims.jwt_id,
@@ -550,6 +570,10 @@ async fn reconcile_service_instance(
             .clone()
             .ok_or_else(ApiError::internal)?
     } else {
+        state
+            .store
+            .renew_operation(&command.operation, operation_id)
+            .await?;
         match state
             .garage
             .reconcile_bucket(context.bucket.physical_bucket_id.as_deref(), &command.spec)
@@ -658,6 +682,10 @@ async fn delete_service_instance(
         .physical_bucket_id
         .as_deref()
         .ok_or_else(ApiError::internal)?;
+    state
+        .store
+        .renew_operation(&command.operation, operation_id)
+        .await?;
     let usage = match state.garage.bucket_usage(physical_bucket_id).await {
         Ok(usage) => usage,
         Err(GarageBackendError::NotFound(_)) => BucketUsage::default(),
@@ -708,6 +736,10 @@ async fn delete_service_instance(
         return Err(error);
     }
     for garage_key_id in &context.garage_key_ids {
+        state
+            .store
+            .renew_operation(&command.operation, operation_id)
+            .await?;
         if let Err(error) = state.garage.revoke_credential(garage_key_id).await {
             return Err(persist_backend_failure(
                 &state,
@@ -726,6 +758,10 @@ async fn delete_service_instance(
             .await);
         }
     }
+    state
+        .store
+        .renew_operation(&command.operation, operation_id)
+        .await?;
     if let Err(error) = state.garage.delete_bucket(physical_bucket_id).await {
         return Err(persist_backend_failure(
             &state,
@@ -963,6 +999,10 @@ async fn create_credential(
         "syouyu-{}-{}",
         principal.scope.service_instance_id, context.credential_id
     );
+    state
+        .store
+        .renew_operation(&command.operation, operation_id)
+        .await?;
     let issued = match state
         .garage
         .create_credential(physical_bucket_id, &deterministic_name, command.permissions)
@@ -1030,12 +1070,13 @@ async fn create_credential(
         .complete_create_credential(&command, operation_id, &credential, &stored, &audit)
         .await
     {
-        if let Err(revoke_error) = state
-            .garage
-            .revoke_credential(&credential.garage_key_id)
-            .await
+        if matches!(&error, StoreError::OperationLeaseLost { .. })
+            && let Err(revoke_error) = state
+                .garage
+                .revoke_credential(&credential.garage_key_id)
+                .await
         {
-            error!(%revoke_error, credential_id = %credential.id, "failed to compensate uncommitted Garage key");
+            error!(%revoke_error, credential_id = %credential.id, "failed to remove key created by a fenced operation");
         }
         return Err(ApiError::from(error));
     }
@@ -1123,6 +1164,10 @@ async fn revoke_credential(
         } => (operation_id, context),
         other => return prepared_response(other),
     };
+    state
+        .store
+        .renew_operation(&command.operation, operation_id)
+        .await?;
     if !context.already_revoked
         && let Err(error) = state.garage.revoke_credential(&context.garage_key_id).await
     {
@@ -1275,7 +1320,7 @@ async fn persist_backend_failure(
         .await
     {
         error!(%error, %operation_id, "failed to persist operation failure receipt");
-        return ApiError::internal();
+        return ApiError::from(error);
     }
     api_error
 }

@@ -13,6 +13,7 @@ use cipher::ReceiptCipher;
 pub use models::*;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
+const OPERATION_LEASE_SECONDS: i64 = 120;
 
 #[derive(Clone)]
 pub struct PgStore {
@@ -80,16 +81,25 @@ impl PgStore {
             &format!("operation:{}", command.operation.idempotency_key),
         )
         .await?;
-        if let Some(replay) = self
-            .existing_receipt(&mut transaction, &command.operation)
+        let claimed_operation_id = match self
+            .claim_existing_receipt(&mut transaction, &command.operation)
             .await?
         {
-            transaction.commit().await?;
-            return Ok(replay.map_context());
-        }
+            ReceiptClaim::New => None,
+            ReceiptClaim::TakenOver { operation_id } => Some(operation_id),
+            ReceiptClaim::Prepared(prepared) => {
+                transaction.commit().await?;
+                return Ok(prepared.map_context());
+            }
+        };
 
         lock_service(&mut transaction, command.operation.service_instance_id).await?;
-        reject_parallel_operation(&mut transaction, command.operation.service_instance_id).await?;
+        reject_parallel_operation(
+            &mut transaction,
+            command.operation.service_instance_id,
+            command.operation.idempotency_key,
+        )
+        .await?;
 
         let existing = fetch_service_row(
             &mut transaction,
@@ -149,7 +159,10 @@ impl PgStore {
             command.operation.service_instance_id,
         )
         .await?;
-        let operation_id = reserve_receipt(&mut transaction, &command.operation).await?;
+        let operation_id = match claimed_operation_id {
+            Some(operation_id) => operation_id,
+            None => reserve_receipt(&mut transaction, &command.operation).await?,
+        };
         transaction.commit().await?;
 
         Ok(Prepare::Execute {
@@ -286,13 +299,17 @@ impl PgStore {
             &format!("operation:{}", command.operation.idempotency_key),
         )
         .await?;
-        if let Some(replay) = self
-            .existing_receipt(&mut transaction, &command.operation)
+        let claimed_operation_id = match self
+            .claim_existing_receipt(&mut transaction, &command.operation)
             .await?
         {
-            transaction.commit().await?;
-            return Ok(replay.map_context());
-        }
+            ReceiptClaim::New => None,
+            ReceiptClaim::TakenOver { operation_id } => Some(operation_id),
+            ReceiptClaim::Prepared(prepared) => {
+                transaction.commit().await?;
+                return Ok(prepared.map_context());
+            }
+        };
         advisory_lock(
             &mut transaction,
             &format!(
@@ -302,7 +319,12 @@ impl PgStore {
         )
         .await?;
         lock_service(&mut transaction, command.operation.service_instance_id).await?;
-        reject_parallel_operation(&mut transaction, command.operation.service_instance_id).await?;
+        reject_parallel_operation(
+            &mut transaction,
+            command.operation.service_instance_id,
+            command.operation.idempotency_key,
+        )
+        .await?;
 
         let service = fetch_service_row(
             &mut transaction,
@@ -351,7 +373,10 @@ impl PgStore {
         .bind(command.operation.service_instance_id)
         .fetch_all(&mut *transaction)
         .await?;
-        let operation_id = reserve_receipt(&mut transaction, &command.operation).await?;
+        let operation_id = match claimed_operation_id {
+            Some(operation_id) => operation_id,
+            None => reserve_receipt(&mut transaction, &command.operation).await?,
+        };
         transaction.commit().await?;
         Ok(Prepare::Execute {
             operation_id,
@@ -434,13 +459,17 @@ impl PgStore {
             &format!("operation:{}", command.operation.idempotency_key),
         )
         .await?;
-        if let Some(replay) = self
-            .existing_receipt(&mut transaction, &command.operation)
+        let claimed_operation_id = match self
+            .claim_existing_receipt(&mut transaction, &command.operation)
             .await?
         {
-            transaction.commit().await?;
-            return Ok(replay.map_context());
-        }
+            ReceiptClaim::New => None,
+            ReceiptClaim::TakenOver { operation_id } => Some(operation_id),
+            ReceiptClaim::Prepared(prepared) => {
+                transaction.commit().await?;
+                return Ok(prepared.map_context());
+            }
+        };
         advisory_lock(
             &mut transaction,
             &format!(
@@ -450,10 +479,41 @@ impl PgStore {
         )
         .await?;
         lock_service(&mut transaction, command.operation.service_instance_id).await?;
-        reject_parallel_operation(&mut transaction, command.operation.service_instance_id).await?;
         let bucket = self
             .ready_bucket_in_transaction(&mut transaction, &command.operation)
             .await?;
+        if let Some(operation_id) = claimed_operation_id {
+            reject_parallel_operation(
+                &mut transaction,
+                command.operation.service_instance_id,
+                command.operation.idempotency_key,
+            )
+            .await?;
+            let reservation = sqlx::query_as::<_, CredentialReservationRow>(
+                r"
+                SELECT credential_id, operation_id, service_instance_id, organization_id,
+                       project_id, name, permissions
+                FROM syouyu_credential_reservations
+                WHERE operation_id = $1
+                FOR UPDATE
+                ",
+            )
+            .bind(operation_id)
+            .fetch_optional(&mut *transaction)
+            .await?
+            .ok_or(StoreError::CorruptData("credential reservation"))?;
+            if !reservation.matches(command) {
+                return Err(StoreError::CorruptData("credential reservation"));
+            }
+            transaction.commit().await?;
+            return Ok(Prepare::Execute {
+                operation_id,
+                context: CreateCredentialContext {
+                    bucket,
+                    credential_id: reservation.credential_id,
+                },
+            });
+        }
         let duplicate: bool = sqlx::query_scalar(
             r"
             SELECT EXISTS (
@@ -518,6 +578,12 @@ impl PgStore {
                 limit: max_total_credentials,
             });
         }
+        reject_parallel_operation(
+            &mut transaction,
+            command.operation.service_instance_id,
+            command.operation.idempotency_key,
+        )
+        .await?;
         let operation_id = reserve_receipt(&mut transaction, &command.operation).await?;
         let credential_id = Uuid::now_v7();
         let permissions = serde_json::to_value(command.permissions)
@@ -648,15 +714,24 @@ impl PgStore {
             &format!("operation:{}", command.operation.idempotency_key),
         )
         .await?;
-        if let Some(replay) = self
-            .existing_receipt(&mut transaction, &command.operation)
+        let claimed_operation_id = match self
+            .claim_existing_receipt(&mut transaction, &command.operation)
             .await?
         {
-            transaction.commit().await?;
-            return Ok(replay.map_context());
-        }
+            ReceiptClaim::New => None,
+            ReceiptClaim::TakenOver { operation_id } => Some(operation_id),
+            ReceiptClaim::Prepared(prepared) => {
+                transaction.commit().await?;
+                return Ok(prepared.map_context());
+            }
+        };
         lock_service(&mut transaction, command.operation.service_instance_id).await?;
-        reject_parallel_operation(&mut transaction, command.operation.service_instance_id).await?;
+        reject_parallel_operation(
+            &mut transaction,
+            command.operation.service_instance_id,
+            command.operation.idempotency_key,
+        )
+        .await?;
         self.ready_bucket_in_transaction(&mut transaction, &command.operation)
             .await?;
         let row = sqlx::query_as::<_, CredentialStateRow>(
@@ -672,7 +747,10 @@ impl PgStore {
         .fetch_optional(&mut *transaction)
         .await?
         .ok_or(StoreError::NotFound)?;
-        let operation_id = reserve_receipt(&mut transaction, &command.operation).await?;
+        let operation_id = match claimed_operation_id {
+            Some(operation_id) => operation_id,
+            None => reserve_receipt(&mut transaction, &command.operation).await?,
+        };
         transaction.commit().await?;
         Ok(Prepare::Execute {
             operation_id,
@@ -713,6 +791,43 @@ impl PgStore {
         self.finish_receipt(&mut transaction, &command.operation, operation_id, response)
             .await?;
         insert_audit(&mut transaction, audit).await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    pub async fn renew_operation(
+        &self,
+        operation: &OperationRequest,
+        operation_id: Uuid,
+    ) -> Result<(), StoreError> {
+        operation.validate()?;
+        let mut transaction = self.pool.begin().await?;
+        advisory_lock(
+            &mut transaction,
+            &format!("operation:{}", operation.idempotency_key),
+        )
+        .await?;
+        require_in_progress_receipt(&mut transaction, operation, operation_id).await?;
+        let renewed = sqlx::query(
+            r"
+            UPDATE syouyu_operation_receipts
+            SET lease_expires_at = clock_timestamp() + ($3 * interval '1 second'),
+                updated_at = now()
+            WHERE idempotency_key = $1
+              AND operation_id = $2
+              AND state = 'in_progress'
+            ",
+        )
+        .bind(operation.idempotency_key)
+        .bind(operation_id)
+        .bind(OPERATION_LEASE_SECONDS)
+        .execute(&mut *transaction)
+        .await?;
+        if renewed.rows_affected() != 1 {
+            return Err(StoreError::OperationLeaseLost {
+                current_operation_id: operation_id,
+            });
+        }
         transaction.commit().await?;
         Ok(())
     }
@@ -926,11 +1041,11 @@ impl PgStore {
         Ok(bucket)
     }
 
-    async fn existing_receipt(
+    async fn claim_existing_receipt(
         &self,
         transaction: &mut Transaction<'_, Postgres>,
         operation: &OperationRequest,
-    ) -> Result<Option<Prepare<()>>, StoreError> {
+    ) -> Result<ReceiptClaim, StoreError> {
         let row = sqlx::query_as::<_, ReceiptRow>(
             "SELECT * FROM syouyu_operation_receipts WHERE idempotency_key = $1 FOR UPDATE",
         )
@@ -938,17 +1053,56 @@ impl PgStore {
         .fetch_optional(&mut **transaction)
         .await?;
         let Some(row) = row else {
-            return Ok(None);
+            return Ok(ReceiptClaim::New);
         };
         if !row.matches(operation) {
             return Err(StoreError::IdempotencyConflict);
         }
         if row.state == "in_progress" {
-            return Ok(Some(Prepare::InProgress {
-                operation_id: row.operation_id,
-            }));
+            if row.lease_expires_at.is_none() {
+                return Err(StoreError::CorruptData("operation receipt lease"));
+            }
+            let operation_id = Uuid::now_v7();
+            let claimed = sqlx::query(
+                r"
+                UPDATE syouyu_operation_receipts
+                SET operation_id = $2,
+                    lease_attempt = lease_attempt + 1,
+                    lease_expires_at = clock_timestamp() + ($3 * interval '1 second'),
+                    updated_at = now()
+                WHERE idempotency_key = $1
+                  AND operation_id = $4
+                  AND state = 'in_progress'
+                  AND lease_expires_at <= clock_timestamp()
+                ",
+            )
+            .bind(operation.idempotency_key)
+            .bind(operation_id)
+            .bind(OPERATION_LEASE_SECONDS)
+            .bind(row.operation_id)
+            .execute(&mut **transaction)
+            .await?;
+            if claimed.rows_affected() == 0 {
+                return Ok(ReceiptClaim::Prepared(Prepare::InProgress {
+                    operation_id: row.operation_id,
+                }));
+            }
+            sqlx::query(
+                r"
+                UPDATE syouyu_credential_reservations
+                SET operation_id = $2
+                WHERE operation_id = $1
+                ",
+            )
+            .bind(row.operation_id)
+            .bind(operation_id)
+            .execute(&mut **transaction)
+            .await?;
+            return Ok(ReceiptClaim::TakenOver { operation_id });
         }
-        Ok(Some(Prepare::Replay(self.decode_receipt(&row)?)))
+        Ok(ReceiptClaim::Prepared(Prepare::Replay(
+            self.decode_receipt(&row)?,
+        )))
     }
 
     async fn finish_receipt(
@@ -965,8 +1119,13 @@ impl PgStore {
         .fetch_optional(&mut **transaction)
         .await?
         .ok_or(StoreError::CorruptData("operation receipt"))?;
-        if !row.matches(operation) || row.operation_id != operation_id {
+        if !row.matches(operation) {
             return Err(StoreError::IdempotencyConflict);
+        }
+        if row.operation_id != operation_id {
+            return Err(StoreError::OperationLeaseLost {
+                current_operation_id: row.operation_id,
+            });
         }
         if row.state != "in_progress" {
             if self.decode_receipt(&row)? == *response {
@@ -986,7 +1145,7 @@ impl PgStore {
         } else {
             "succeeded"
         };
-        sqlx::query(
+        let updated = sqlx::query(
             r"
             UPDATE syouyu_operation_receipts
             SET state = $2,
@@ -994,8 +1153,11 @@ impl PgStore {
                 response_nonce = $4,
                 response_ciphertext = $5,
                 completed_at = now(),
+                lease_expires_at = NULL,
                 updated_at = now()
-            WHERE idempotency_key = $1 AND state = 'in_progress'
+            WHERE idempotency_key = $1
+              AND operation_id = $6
+              AND state = 'in_progress'
             ",
         )
         .bind(operation.idempotency_key)
@@ -1003,8 +1165,14 @@ impl PgStore {
         .bind(i32::from(response.status))
         .bind(nonce.as_slice())
         .bind(ciphertext)
+        .bind(operation_id)
         .execute(&mut **transaction)
         .await?;
+        if updated.rows_affected() != 1 {
+            return Err(StoreError::OperationLeaseLost {
+                current_operation_id: row.operation_id,
+            });
+        }
         Ok(())
     }
 
@@ -1047,6 +1215,12 @@ impl<T> Prepare<T> {
     }
 }
 
+enum ReceiptClaim {
+    New,
+    TakenOver { operation_id: Uuid },
+    Prepared(Prepare<()>),
+}
+
 async fn reserve_receipt(
     transaction: &mut Transaction<'_, Postgres>,
     operation: &OperationRequest,
@@ -1056,9 +1230,13 @@ async fn reserve_receipt(
         r"
         INSERT INTO syouyu_operation_receipts (
             idempotency_key, operation_id, organization_id, project_id,
-            service_instance_id, principal_id, action, generation, request_hash, state
+            service_instance_id, principal_id, action, generation, request_hash,
+            state, lease_expires_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'in_progress')
+        VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9,
+            'in_progress', clock_timestamp() + ($10 * interval '1 second')
+        )
         ",
     )
     .bind(operation.idempotency_key)
@@ -1070,6 +1248,7 @@ async fn reserve_receipt(
     .bind(&operation.action)
     .bind(operation.generation)
     .bind(operation.request_hash.as_slice())
+    .bind(OPERATION_LEASE_SECONDS)
     .execute(&mut **transaction)
     .await
     .map_err(map_database_error)?;
@@ -1094,8 +1273,13 @@ async fn require_in_progress_receipt(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(StoreError::CorruptData("operation receipt"))?;
-    if row.operation_id != operation_id || !row.matches(operation) {
+    if !row.matches(operation) {
         return Err(StoreError::IdempotencyConflict);
+    }
+    if row.operation_id != operation_id {
+        return Err(StoreError::OperationLeaseLost {
+            current_operation_id: row.operation_id,
+        });
     }
     if row.state != "in_progress" {
         return Err(StoreError::Conflict("operation is already complete"));
@@ -1106,17 +1290,21 @@ async fn require_in_progress_receipt(
 async fn reject_parallel_operation(
     transaction: &mut Transaction<'_, Postgres>,
     service_instance_id: Uuid,
+    idempotency_key: Uuid,
 ) -> Result<(), StoreError> {
     let operation_id = sqlx::query_scalar::<_, Uuid>(
         r"
         SELECT operation_id
         FROM syouyu_operation_receipts
-        WHERE service_instance_id = $1 AND state = 'in_progress'
+        WHERE service_instance_id = $1
+          AND state = 'in_progress'
+          AND idempotency_key <> $2
         ORDER BY created_at
         LIMIT 1
         ",
     )
     .bind(service_instance_id)
+    .bind(idempotency_key)
     .fetch_optional(&mut **transaction)
     .await?;
     if let Some(operation_id) = operation_id {
@@ -1359,6 +1547,9 @@ struct ReceiptRow {
     generation: Option<i64>,
     request_hash: Vec<u8>,
     state: String,
+    #[allow(dead_code)]
+    lease_attempt: i64,
+    lease_expires_at: Option<DateTime<Utc>>,
     response_status: Option<i32>,
     response_nonce: Option<Vec<u8>>,
     response_ciphertext: Option<Vec<u8>>,
@@ -1393,6 +1584,29 @@ struct ReceiptIdentityRow {
     generation: Option<i64>,
     request_hash: Vec<u8>,
     state: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct CredentialReservationRow {
+    credential_id: Uuid,
+    #[allow(dead_code)]
+    operation_id: Uuid,
+    service_instance_id: Uuid,
+    organization_id: Uuid,
+    project_id: Uuid,
+    name: String,
+    permissions: Value,
+}
+
+impl CredentialReservationRow {
+    fn matches(&self, command: &CreateCredentialCommand) -> bool {
+        self.service_instance_id == command.operation.service_instance_id
+            && self.organization_id == command.operation.organization_id
+            && self.project_id == command.operation.project_id
+            && self.name == command.name
+            && serde_json::from_value::<syouyu_domain::BucketPermissions>(self.permissions.clone())
+                .is_ok_and(|permissions| permissions == command.permissions)
+    }
 }
 
 impl ReceiptIdentityRow {
@@ -1467,6 +1681,8 @@ pub enum StoreError {
     StaleGeneration { current: i64, requested: i64 },
     #[error("operation {0} is still in progress")]
     OperationInProgress(Uuid),
+    #[error("operation lease was taken over by {current_operation_id}")]
+    OperationLeaseLost { current_operation_id: Uuid },
     #[error("service instance is not ready")]
     ServiceNotReady,
     #[error("{scope} active credential limit of {limit} has been reached")]

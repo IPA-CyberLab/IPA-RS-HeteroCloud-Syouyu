@@ -19,6 +19,7 @@ pub struct Config {
     pub principal_authenticator: PrincipalAuthenticator,
     pub garage_admin_endpoint: Url,
     pub garage_admin_token: String,
+    pub garage_region: String,
     pub s3_public_endpoint: Url,
 }
 
@@ -56,6 +57,9 @@ impl Config {
         let garage_admin_endpoint =
             absolute_http_url("GARAGE_ADMIN_ENDPOINT", &required("GARAGE_ADMIN_ENDPOINT")?)?;
         let garage_admin_token = required("GARAGE_ADMIN_TOKEN")?;
+        let garage_region =
+            env::var("GARAGE_REGION").unwrap_or_else(|_| "heteronet-global".to_owned());
+        validate_region(&garage_region)?;
         let s3_public_endpoint = absolute_http_url(
             "SYOUYU_S3_PUBLIC_ENDPOINT",
             &required("SYOUYU_S3_PUBLIC_ENDPOINT")?,
@@ -71,6 +75,7 @@ impl Config {
             principal_authenticator,
             garage_admin_endpoint,
             garage_admin_token,
+            garage_region,
             s3_public_endpoint,
         })
     }
@@ -107,9 +112,23 @@ fn absolute_http_url(name: &'static str, value: &str) -> Result<Url> {
     Ok(url)
 }
 
+fn validate_region(value: &str) -> Result<()> {
+    if value.is_empty()
+        || value.len() > 63
+        || value.starts_with('-')
+        || value.ends_with('-')
+        || value
+            .bytes()
+            .any(|byte| !byte.is_ascii_lowercase() && !byte.is_ascii_digit() && byte != b'-')
+    {
+        bail!("GARAGE_REGION must be a lowercase DNS label of at most 63 characters");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::absolute_http_url;
+    use super::{absolute_http_url, validate_region};
 
     #[test]
     fn validates_service_origins() {
@@ -121,5 +140,13 @@ mod tests {
         );
         assert!(absolute_http_url("TEST", "ftp://s3.example.test").is_err());
         assert!(absolute_http_url("TEST", "https://user@s3.example.test").is_err());
+    }
+
+    #[test]
+    fn validates_garage_region() {
+        assert!(validate_region("heteronet-global").is_ok());
+        for invalid in ["", "Heteronet", "-leading", "trailing-", "with.dot"] {
+            assert!(validate_region(invalid).is_err());
+        }
     }
 }

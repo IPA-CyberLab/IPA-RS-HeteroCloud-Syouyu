@@ -162,6 +162,9 @@ impl From<StoreError> for ApiError {
             StoreError::OperationInProgress(operation_id) => {
                 Self::operation_in_progress(operation_id)
             }
+            StoreError::OperationLeaseLost {
+                current_operation_id,
+            } => Self::operation_in_progress(current_operation_id),
             StoreError::ServiceNotReady => {
                 Self::conflict("service_not_ready", "service instance is not ready")
             }

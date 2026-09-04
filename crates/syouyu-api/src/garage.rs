@@ -145,6 +145,22 @@ impl Garage for GarageAdapter {
         deterministic_name: &str,
         permissions: BucketPermissions,
     ) -> Result<IssuedCredential, GarageBackendError> {
+        let existing_key_ids = self
+            .client
+            .list_keys()
+            .await
+            .map_err(GarageBackendError::from)?
+            .into_iter()
+            .filter(|key| key.name == deterministic_name)
+            .map(|key| key.id)
+            .collect::<Vec<_>>();
+        for access_key_id in existing_key_ids {
+            match self.client.delete_key(&access_key_id).await {
+                Ok(()) => {}
+                Err(error) if error.is_not_found() => {}
+                Err(error) => return Err(GarageBackendError::from(error)),
+            }
+        }
         let key = self
             .client
             .create_key(&CreateKeyRequest::new(deterministic_name, None))
@@ -230,9 +246,34 @@ pub const fn bucket_is_empty(usage: BucketUsage) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use syouyu_domain::BucketUsage;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        sync::mpsc,
+        thread,
+        time::Duration,
+    };
 
-    use super::bucket_is_empty;
+    use syouyu_domain::{BucketPermissions, BucketUsage, SyouyuSpec};
+    use syouyu_garage::GarageAdminClient;
+    use url::Url;
+
+    use super::{Garage, GarageAdapter, bucket_is_empty};
+
+    const BUCKET_JSON: &str = r#"{
+        "id":"bucket-id",
+        "created":"2026-09-04T00:00:00Z",
+        "globalAliases":["tenant-bucket"],
+        "websiteAccess":false,
+        "keys":[],
+        "objects":0,
+        "bytes":0,
+        "unfinishedUploads":0,
+        "unfinishedMultipartUploads":0,
+        "unfinishedMultipartUploadParts":0,
+        "unfinishedMultipartUploadBytes":0,
+        "quotas":{"maxSize":1024,"maxObjects":100}
+    }"#;
 
     #[test]
     fn unfinished_uploads_make_bucket_non_empty() {
@@ -245,5 +286,200 @@ mod tests {
             bytes: 1,
             ..BucketUsage::default()
         }));
+    }
+
+    #[tokio::test]
+    async fn reconcile_recovers_bucket_created_before_database_completion() {
+        let (endpoint, requests) = mock_server(vec![
+            response("404 Not Found", r#"{"message":"missing"}"#),
+            ok(BUCKET_JSON),
+            ok(BUCKET_JSON),
+            ok(BUCKET_JSON),
+            ok(BUCKET_JSON),
+        ]);
+        let adapter = GarageAdapter::new(GarageAdminClient::new(endpoint, "token").unwrap());
+        let spec = SyouyuSpec {
+            region: "heteronet-global".into(),
+            bucket_name: "tenant-bucket".into(),
+            quota_bytes: 1_024,
+            quota_objects: 100,
+        };
+
+        let first = adapter.reconcile_bucket(None, &spec).await.unwrap();
+        let second = adapter.reconcile_bucket(None, &spec).await.unwrap();
+        assert_eq!(first, second);
+
+        let paths = receive_paths(&requests, 5);
+        assert_eq!(
+            paths,
+            vec![
+                "/v2/GetBucketInfo?globalAlias=tenant-bucket",
+                "/v2/CreateBucket",
+                "/v2/UpdateBucket?id=bucket-id",
+                "/v2/GetBucketInfo?globalAlias=tenant-bucket",
+                "/v2/UpdateBucket?id=bucket-id",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn credential_retry_replaces_key_left_by_partial_success() {
+        let first_key = key_json("key-one", "first-secret");
+        let second_key = key_json("key-two", "second-secret");
+        let (endpoint, requests) = mock_server(vec![
+            ok("[]"),
+            ok(&first_key),
+            ok(BUCKET_JSON),
+            ok(BUCKET_JSON),
+            ok(
+                r#"[{"id":"key-one","name":"deterministic","expired":false,"created":null,"expiration":null}]"#,
+            ),
+            empty("200 OK"),
+            ok(&second_key),
+            ok(BUCKET_JSON),
+            ok(BUCKET_JSON),
+        ]);
+        let adapter = GarageAdapter::new(GarageAdminClient::new(endpoint, "token").unwrap());
+        let permissions = BucketPermissions {
+            read: true,
+            write: true,
+        };
+
+        let first = adapter
+            .create_credential("bucket-id", "deterministic", permissions)
+            .await
+            .unwrap();
+        assert_eq!(first.garage_key_id, "key-one");
+        let second = adapter
+            .create_credential("bucket-id", "deterministic", permissions)
+            .await
+            .unwrap();
+        assert_eq!(second.garage_key_id, "key-two");
+        assert_eq!(second.secret_access_key, "second-secret");
+
+        let paths = receive_paths(&requests, 9);
+        assert_eq!(paths[0], "/v2/ListKeys");
+        assert_eq!(paths[4], "/v2/ListKeys");
+        assert_eq!(paths[5], "/v2/DeleteKey?id=key-one");
+        assert_eq!(
+            paths
+                .iter()
+                .filter(|path| path.as_str() == "/v2/CreateKey")
+                .count(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_and_revoke_are_safe_after_external_partial_success() {
+        let (endpoint, requests) = mock_server(vec![
+            empty("200 OK"),
+            response("404 Not Found", r#"{"message":"already deleted"}"#),
+            empty("200 OK"),
+            response("404 Not Found", r#"{"message":"already revoked"}"#),
+        ]);
+        let adapter = GarageAdapter::new(GarageAdminClient::new(endpoint, "token").unwrap());
+
+        adapter.delete_bucket("bucket-id").await.unwrap();
+        adapter.delete_bucket("bucket-id").await.unwrap();
+        adapter.revoke_credential("key-id").await.unwrap();
+        adapter.revoke_credential("key-id").await.unwrap();
+
+        assert_eq!(
+            receive_paths(&requests, 4),
+            vec![
+                "/v2/DeleteBucket?id=bucket-id",
+                "/v2/DeleteBucket?id=bucket-id",
+                "/v2/DeleteKey?id=key-id",
+                "/v2/DeleteKey?id=key-id",
+            ]
+        );
+    }
+
+    fn key_json(access_key_id: &str, secret: &str) -> String {
+        format!(
+            r#"{{"accessKeyId":"{access_key_id}","name":"deterministic","expired":false,"created":null,"expiration":null,"permissions":{{"createBucket":false}},"buckets":[],"secretAccessKey":"{secret}"}}"#
+        )
+    }
+
+    fn ok(body: &str) -> String {
+        response("200 OK", body)
+    }
+
+    fn empty(status: &str) -> String {
+        response(status, "")
+    }
+
+    fn response(status: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    fn mock_server(responses: Vec<String>) -> (Url, mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            for response in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                sender.send(read_request(&mut stream)).unwrap();
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        (Url::parse(&format!("http://{address}/")).unwrap(), receiver)
+    }
+
+    fn receive_paths(receiver: &mpsc::Receiver<String>, count: usize) -> Vec<String> {
+        (0..count)
+            .map(|_| {
+                receiver
+                    .recv_timeout(Duration::from_secs(2))
+                    .unwrap()
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    fn read_request(stream: &mut std::net::TcpStream) -> String {
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4_096];
+        let mut expected_length = None;
+        loop {
+            let count = stream.read(&mut buffer).unwrap();
+            if count == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buffer[..count]);
+            if expected_length.is_none()
+                && let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n")
+            {
+                let headers = String::from_utf8_lossy(&bytes[..header_end]);
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                expected_length = Some(header_end + 4 + content_length);
+            }
+            if expected_length.is_some_and(|length| bytes.len() >= length) {
+                break;
+            }
+        }
+        String::from_utf8(bytes).unwrap()
     }
 }

@@ -47,6 +47,7 @@ async fn run() -> Result<()> {
         garage: Arc::new(GarageAdapter::new(garage_client)),
         provider_auth: config.provider_authenticator,
         principal_auth: config.principal_authenticator,
+        storage_region: config.garage_region.into(),
         s3_endpoint: config.s3_public_endpoint,
     });
     let listener = TcpListener::bind(bind_addr)
