@@ -1,0 +1,39 @@
+[package]
+name = "syouyu-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait = "0.1.89"
+axum.workspace = true
+base64.workspace = true
+chrono.workspace = true
+hmac = "0.12.1"
+http.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+syouyu-auth.workspace = true
+syouyu-domain.workspace = true
+syouyu-garage.workspace = true
+syouyu-store.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+utoipa.workspace = true
+utoipa-swagger-ui.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tower = { version = "0.5.3", features = ["util"] }
+
+[lints]
+workspace = true

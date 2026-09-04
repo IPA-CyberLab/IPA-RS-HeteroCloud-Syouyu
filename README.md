@@ -31,15 +31,24 @@ Customer applications use the public S3 endpoint with a bucket-scoped access
 key. Garage's administration endpoint and Syouyu's provider endpoint are never
 published to the internet.
 
-## Provider API
+## APIs
 
 | Method and path | Result |
 | --- | --- |
 | `PUT /internal/v1/service-instances/{id}` | Reconcile the bucket represented by a service instance |
 | `DELETE /internal/v1/service-instances/{id}` | Remove an empty bucket after revoking its keys |
-| `GET/POST /internal/v1/service-instances/{id}/credentials` | List or issue bucket-scoped keys |
-| `DELETE /internal/v1/service-instances/{id}/credentials/{credential_id}` | Revoke an access key |
-| `GET /internal/v1/service-instances/{id}/usage` | Return current bytes and object count |
+| `GET /v1/service-overview` | Return the signed principal's bucket metadata |
+| `GET /v1/usage` | Return current bytes, objects, multipart bytes, and key count |
+| `GET/POST /v1/credentials` | List or issue bucket-scoped keys |
+| `DELETE /v1/credentials/{credential_id}` | Revoke an access key |
+
+The internal provider routes require the short-lived EdDSA provider JWT. The
+`/v1/*` routes require HeteroCloud's short-lived, service-scoped HMAC principal
+headers. They are intended to be reached through the authenticated
+HeteroCloud API proxy, not exposed directly to browsers.
+
+Interactive OpenAPI documentation is available at `/docs`; the machine-
+readable document is served at `/openapi.json`.
 
 ## License
 

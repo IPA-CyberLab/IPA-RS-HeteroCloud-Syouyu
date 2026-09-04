@@ -1,0 +1,53 @@
+[workspace]
+members = [
+    "crates/syouyu-api",
+    "crates/syouyu-auth",
+    "crates/syouyu-domain",
+    "crates/syouyu-garage",
+    "crates/syouyu-store",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/IPA-CyberLab/IPA-RS-HeteroCloud-Syouyu"
+rust-version = "1.96"
+version = "0.1.0"
+
+[workspace.dependencies]
+anyhow = "1.0.102"
+axum = { version = "0.8.9", features = ["json", "macros"] }
+base64 = "0.22.1"
+chrono = { version = "0.4.44", features = ["serde"] }
+http = "1.4.0"
+jsonwebtoken = { version = "11.0.0", default-features = false, features = ["rust_crypto", "use_pem"] }
+reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls"] }
+secrecy = { version = "0.10.3", features = ["serde"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sha2 = "0.10.9"
+sqlx = { version = "0.9.0", default-features = false, features = ["chrono", "derive", "json", "macros", "migrate", "postgres", "runtime-tokio", "tls-rustls-ring-webpki", "uuid"] }
+thiserror = "2.0.18"
+tokio = { version = "1.50.0", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
+tower-http = { version = "0.7.0", features = ["request-id", "trace"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+url = { version = "2.5.8", features = ["serde"] }
+utoipa = { version = "5.5.0", features = ["axum_extras", "chrono", "uuid"] }
+utoipa-swagger-ui = { version = "9.0.2", default-features = false, features = ["axum", "vendored"] }
+uuid = { version = "1.24.0", features = ["serde", "v4", "v7"] }
+
+syouyu-auth = { path = "crates/syouyu-auth" }
+syouyu-domain = { path = "crates/syouyu-domain" }
+syouyu-garage = { path = "crates/syouyu-garage" }
+syouyu-store = { path = "crates/syouyu-store" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -2 }
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+too_many_lines = "allow"

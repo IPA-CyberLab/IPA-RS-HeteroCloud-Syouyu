@@ -1,0 +1,23 @@
+[package]
+name = "syouyu-garage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+chrono.workspace = true
+reqwest = { workspace = true, features = ["query", "stream"] }
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+syouyu-domain.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true
