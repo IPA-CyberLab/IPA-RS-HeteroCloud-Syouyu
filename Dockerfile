@@ -2,7 +2,7 @@
 FROM rust:1.96.1-bookworm AS builder
 
 WORKDIR /source
-COPY Cargo.toml rust-toolchain.toml ./
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
 COPY migrations ./migrations
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
