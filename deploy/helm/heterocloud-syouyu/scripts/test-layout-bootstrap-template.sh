@@ -10,7 +10,12 @@ helm template syouyu "$chart_dir" \
   -f "$chart_dir/ci/test-values.yaml" >"$rendered"
 
 grep -q '^kind: Job$' "$rendered"
-grep -q 'helm.sh/hook: post-install,post-upgrade' "$rendered"
+grep -q 'argocd.argoproj.io/hook: Sync' "$rendered"
+grep -q 'argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded' "$rendered"
+if grep -q 'helm.sh/hook: post-install' "$rendered"; then
+  echo 'layout bootstrap must run during Argo CD Sync, not PostSync' >&2
+  exit 1
+fi
 grep -q '/v2/GetClusterStatus' "$rendered"
 grep -q '/v2/UpdateClusterLayout' "$rendered"
 grep -q '/v2/ApplyClusterLayout' "$rendered"

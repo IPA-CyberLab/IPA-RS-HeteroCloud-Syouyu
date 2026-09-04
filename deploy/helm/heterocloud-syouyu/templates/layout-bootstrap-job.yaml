@@ -11,17 +11,20 @@
       "capacity" (int64 $.Values.garage.layout.capacityBytesPerNode)
       "tags" (concat $.Values.garage.layout.tags (list (printf "ordinal-%d" $ordinal)))) -}}
 {{- end -}}
+{{- $layoutHashInput := dict
+      "nodes" $desiredNodes
+      "zoneRedundancy" .Values.garage.layout.zoneRedundancy -}}
+{{- $layoutHash := sha256sum ($layoutHashInput | toJson) | trunc 8 -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "syouyu.fullname" . }}-layout-bootstrap
+  name: {{ printf "%s-layout-%s" (include "syouyu.fullname" . | trunc 47 | trimSuffix "-") $layoutHash }}
   labels:
     {{- include "syouyu.labels" . | nindent 4 }}
     app.kubernetes.io/component: layout-bootstrap
   annotations:
-    helm.sh/hook: post-install,post-upgrade
-    helm.sh/hook-weight: "10"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
 spec:
   backoffLimit: {{ .Values.layoutBootstrap.backoffLimit }}
   activeDeadlineSeconds: {{ .Values.layoutBootstrap.activeDeadlineSeconds }}
