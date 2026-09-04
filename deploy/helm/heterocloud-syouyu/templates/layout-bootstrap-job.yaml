@@ -13,7 +13,8 @@
 {{- end -}}
 {{- $layoutHashInput := dict
       "nodes" $desiredNodes
-      "zoneRedundancy" .Values.garage.layout.zoneRedundancy -}}
+      "zoneRedundancy" .Values.garage.layout.zoneRedundancy
+      "appVersion" .Chart.AppVersion -}}
 {{- $layoutHash := sha256sum ($layoutHashInput | toJson) | trunc 8 -}}
 apiVersion: batch/v1
 kind: Job
