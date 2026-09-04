@@ -19,6 +19,7 @@ fi
 grep -q '/v2/GetClusterStatus' "$rendered"
 grep -q '/v2/UpdateClusterLayout' "$rendered"
 grep -q '/v2/ApplyClusterLayout' "$rendered"
+grep -q 'ready="${ready:-0}"' "$rendered"
 grep -q 'layout already matches the requested three-node layout' "$rendered"
 grep -q 'statefulset.kubernetes.io/pod-name: syouyu-heterocloud-syouyu-garage-0' "$rendered"
 grep -q 'storage-a' "$rendered"

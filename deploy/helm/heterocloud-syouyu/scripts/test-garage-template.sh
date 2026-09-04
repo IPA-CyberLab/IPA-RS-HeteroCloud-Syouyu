@@ -13,6 +13,7 @@ helm template syouyu "$chart_dir" \
 grep -q '^kind: StatefulSet$' "$rendered"
 grep -q '^  replicas: 3$' "$rendered"
 grep -q 'image: "dxflrs/garage:v2.3.0"' "$rendered"
+grep -A1 'name: GARAGE_ALLOW_WORLD_READABLE_SECRETS' "$rendered" | grep -q 'value: "true"'
 grep -q 'replication_factor = 3' "$rendered"
 grep -q 'consistency_mode = "consistent"' "$rendered"
 grep -q 'requiredDuringSchedulingIgnoredDuringExecution:' "$rendered"

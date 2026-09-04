@@ -89,6 +89,10 @@ spec:
           env:
             - name: GARAGE_CONFIG_FILE
               value: /etc/garage.toml
+            # Kubernetes Secret volumes are group-readable so a non-root
+            # process can consume them through fsGroup.
+            - name: GARAGE_ALLOW_WORLD_READABLE_SECRETS
+              value: "true"
           ports:
             - name: s3
               containerPort: {{ .Values.garage.ports.s3 }}

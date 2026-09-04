@@ -68,6 +68,7 @@ spec:
                     | select(.hostname == $want.hostname and .isUp == true)
                   ] | length
                 ' 2>/dev/null || printf '0')"
+                ready="${ready:-0}"
                 if [ "$ready" -eq "{{ .Values.garage.replicaCount }}" ]; then
                   break
                 fi
