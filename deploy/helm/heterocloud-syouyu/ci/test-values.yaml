@@ -1,0 +1,65 @@
+image:
+  tag: 0.1.0-test
+
+secrets:
+  create: true
+  existingSecret: ""
+  values:
+    databaseUrl: postgres://syouyu:ci-only@postgresql:5432/syouyu?sslmode=disable
+    providerPublicKeysJson: '{"ci-only":"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAQnTjC0+B/djS2k/sebsW6/7yCb+Am2NFtI1EzKH/ZTA=\n-----END PUBLIC KEY-----\n"}'
+    receiptEncryptionKeyBase64: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+    principalContextHmacSecret: ci-only-principal-context-hmac-secret
+    garageRpcSecret: "0000000000000000000000000000000000000000000000000000000000000000"
+    garageAdminToken: ci-only-garage-admin-token
+    garageMetricsToken: ci-only-garage-metrics-token
+
+database:
+  port: 5432
+
+garage:
+  config:
+    s3RootDomain: .s3.syouyu.example.test
+  persistence:
+    meta:
+      storageClass: standard
+      size: 1Gi
+    data:
+      storageClass: standard
+      size: 10Gi
+  s3Service:
+    publicEndpoint: https://s3.syouyu.example.test
+  gateway:
+    enabled: true
+    parentRefs:
+      - name: public-gateway
+        namespace: gateway-system
+        sectionName: https
+    hostnames:
+      - s3.syouyu.example.test
+      - "*.s3.syouyu.example.test"
+
+monitoring:
+  serviceMonitor:
+    labels:
+      release: kube-prometheus-stack
+
+networkPolicy:
+  apiIngress:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: heterocloud
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/component: worker
+  monitoringIngress:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
+  database:
+    sameNamespace: true
+    podSelector:
+      matchLabels:
+        app.kubernetes.io/name: postgresql

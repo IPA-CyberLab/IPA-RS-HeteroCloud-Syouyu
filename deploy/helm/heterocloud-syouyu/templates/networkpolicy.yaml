@@ -1,0 +1,178 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "syouyu.fullname" . }}-default-deny
+  labels:
+    {{- include "syouyu.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "syouyu.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "syouyu.fullname" . }}-dns
+  labels:
+    {{- include "syouyu.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "syouyu.selectorLabels" . | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.dns.namespaceSelector | nindent 12 }}
+      ports:
+        - port: {{ .Values.networkPolicy.dns.udpPort }}
+          protocol: UDP
+        - port: {{ .Values.networkPolicy.dns.tcpPort }}
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "syouyu.garageName" . }}
+  labels:
+    {{- include "syouyu.labels" . | nindent 4 }}
+    app.kubernetes.io/component: garage
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "syouyu.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: garage
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "syouyu.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: garage
+      ports:
+        - port: {{ .Values.garage.ports.rpc }}
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: [api, layout-bootstrap]
+            matchLabels:
+              {{- include "syouyu.selectorLabels" . | nindent 14 }}
+        {{- range .Values.networkPolicy.monitoringIngress }}
+        - {{- toYaml . | nindent 10 }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.garage.ports.admin }}
+          protocol: TCP
+    - from:
+        {{- range .Values.networkPolicy.s3IngressCidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.garage.ports.s3 }}
+          protocol: TCP
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "syouyu.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: garage
+      ports:
+        - port: {{ .Values.garage.ports.rpc }}
+          protocol: TCP
+    {{- range .Values.networkPolicy.kubernetesApiCidrs }}
+    - to:
+        - ipBlock:
+            cidr: {{ . | quote }}
+      ports:
+        {{- range $.Values.networkPolicy.kubernetesApiPorts }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "syouyu.fullname" . }}-api
+  labels:
+    {{- include "syouyu.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "syouyu.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        {{- range .Values.networkPolicy.apiIngress }}
+        - {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- range .Values.networkPolicy.monitoringIngress }}
+        - {{- toYaml . | nindent 10 }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.api.service.port }}
+          protocol: TCP
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "syouyu.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: garage
+      ports:
+        - port: {{ .Values.garage.ports.admin }}
+          protocol: TCP
+    {{- if .Values.networkPolicy.database.sameNamespace }}
+    - to:
+        - podSelector:
+            {{- toYaml .Values.networkPolicy.database.podSelector | nindent 12 }}
+      ports:
+        - port: {{ .Values.database.port }}
+          protocol: TCP
+    {{- end }}
+    {{- range .Values.networkPolicy.database.peers }}
+    - to:
+        - {{- toYaml . | nindent 10 }}
+      ports:
+        - port: {{ $.Values.database.port }}
+          protocol: TCP
+    {{- end }}
+    {{- range .Values.networkPolicy.database.externalCidrs }}
+    - to:
+        - ipBlock:
+            cidr: {{ . | quote }}
+      ports:
+        - port: {{ $.Values.database.port }}
+          protocol: TCP
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "syouyu.fullname" . }}-layout-bootstrap
+  labels:
+    {{- include "syouyu.labels" . | nindent 4 }}
+    app.kubernetes.io/component: layout-bootstrap
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "syouyu.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: layout-bootstrap
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "syouyu.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: garage
+      ports:
+        - port: {{ .Values.garage.ports.admin }}
+          protocol: TCP
+{{- end }}

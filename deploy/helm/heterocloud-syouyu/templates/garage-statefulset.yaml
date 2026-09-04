@@ -1,0 +1,179 @@
+{{- if ne (int .Values.garage.replicaCount) 3 }}
+{{- fail "garage.replicaCount must be 3 for the RF=3 Syouyu deployment" }}
+{{- end }}
+{{- if ne (int .Values.garage.config.replicationFactor) 3 }}
+{{- fail "garage.config.replicationFactor must be 3" }}
+{{- end }}
+{{- if ne .Values.garage.config.consistencyMode "consistent" }}
+{{- fail "garage.config.consistencyMode must be consistent" }}
+{{- end }}
+{{- $garageName := include "syouyu.garageName" . -}}
+{{- $antiAffinity := dict -}}
+{{- if eq .Values.garage.scheduling.antiAffinity "required" -}}
+{{- $antiAffinity = dict "podAntiAffinity" (dict "requiredDuringSchedulingIgnoredDuringExecution" (list (dict "labelSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" (include "syouyu.name" .) "app.kubernetes.io/instance" .Release.Name "app.kubernetes.io/component" "garage")) "topologyKey" .Values.garage.scheduling.topologyKey))) -}}
+{{- else if eq .Values.garage.scheduling.antiAffinity "preferred" -}}
+{{- $term := dict "labelSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" (include "syouyu.name" .) "app.kubernetes.io/instance" .Release.Name "app.kubernetes.io/component" "garage")) "topologyKey" .Values.garage.scheduling.topologyKey -}}
+{{- $antiAffinity = dict "podAntiAffinity" (dict "preferredDuringSchedulingIgnoredDuringExecution" (list (dict "weight" 100 "podAffinityTerm" $term))) -}}
+{{- end -}}
+{{- $affinity := mergeOverwrite (deepCopy $antiAffinity) (.Values.garage.scheduling.affinity | default dict) -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $garageName }}
+  labels:
+    {{- include "syouyu.labels" . | nindent 4 }}
+    app.kubernetes.io/component: garage
+spec:
+  replicas: {{ .Values.garage.replicaCount }}
+  serviceName: {{ $garageName }}-headless
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "syouyu.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: garage
+  template:
+    metadata:
+      labels:
+        {{- include "syouyu.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: garage
+        {{- with .Values.garage.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/garage-config: {{ include (print $.Template.BasePath "/garage-config.yaml") . | sha256sum }}
+        {{- with .Values.garage.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "syouyu.garageServiceAccountName" . }}
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: {{ .Values.garage.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.garage.podSecurityContext | nindent 8 }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.garage.scheduling.topologySpread.enabled }}
+      topologySpreadConstraints:
+        - maxSkew: {{ .Values.garage.scheduling.topologySpread.maxSkew }}
+          topologyKey: {{ .Values.garage.scheduling.topologyKey }}
+          whenUnsatisfiable: {{ .Values.garage.scheduling.topologySpread.whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              {{- include "syouyu.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: garage
+      {{- end }}
+      {{- with .Values.garage.scheduling.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.garage.scheduling.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.garage.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      containers:
+        - name: garage
+          image: {{ printf "%s:%s" .Values.garage.image.repository .Values.garage.image.tag | quote }}
+          imagePullPolicy: {{ .Values.garage.image.pullPolicy }}
+          command: ["/garage", "server"]
+          env:
+            - name: GARAGE_CONFIG_FILE
+              value: /etc/garage.toml
+          ports:
+            - name: s3
+              containerPort: {{ .Values.garage.ports.s3 }}
+              protocol: TCP
+            - name: rpc
+              containerPort: {{ .Values.garage.ports.rpc }}
+              protocol: TCP
+            - name: admin
+              containerPort: {{ .Values.garage.ports.admin }}
+              protocol: TCP
+          startupProbe:
+            tcpSocket:
+              port: admin
+            periodSeconds: {{ .Values.garage.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.garage.probes.startup.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: admin
+            periodSeconds: {{ .Values.garage.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.garage.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.garage.probes.readiness.failureThreshold }}
+          livenessProbe:
+            tcpSocket:
+              port: admin
+            periodSeconds: {{ .Values.garage.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.garage.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.garage.probes.liveness.failureThreshold }}
+          securityContext:
+            {{- toYaml .Values.garage.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.garage.resources | nindent 12 }}
+          volumeMounts:
+            - name: garage-config
+              mountPath: /etc/garage.toml
+              subPath: garage.toml
+              readOnly: true
+            - name: garage-secrets
+              mountPath: /run/secrets/syouyu
+              readOnly: true
+            - name: meta
+              mountPath: /var/lib/garage/meta
+            - name: data
+              mountPath: /var/lib/garage/data
+      volumes:
+        - name: garage-config
+          configMap:
+            name: {{ include "syouyu.garageConfigName" . }}
+        - name: garage-secrets
+          secret:
+            secretName: {{ include "syouyu.secretName" . }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.secrets.keys.garageRpcSecret }}
+                path: {{ .Values.secrets.keys.garageRpcSecret }}
+              - key: {{ .Values.secrets.keys.garageAdminToken }}
+                path: {{ .Values.secrets.keys.garageAdminToken }}
+              - key: {{ .Values.secrets.keys.garageMetricsToken }}
+                path: {{ .Values.secrets.keys.garageMetricsToken }}
+  volumeClaimTemplates:
+    - metadata:
+        name: meta
+        labels:
+          {{- include "syouyu.selectorLabels" . | nindent 10 }}
+          app.kubernetes.io/component: garage
+          app.kubernetes.io/storage: metadata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.garage.persistence.meta.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.garage.persistence.meta.size | quote }}
+    - metadata:
+        name: data
+        labels:
+          {{- include "syouyu.selectorLabels" . | nindent 10 }}
+          app.kubernetes.io/component: garage
+          app.kubernetes.io/storage: objects
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.garage.persistence.data.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.garage.persistence.data.size | quote }}

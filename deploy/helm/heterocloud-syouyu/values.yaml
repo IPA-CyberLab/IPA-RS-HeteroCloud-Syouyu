@@ -1,0 +1,286 @@
+nameOverride: ""
+fullnameOverride: ""
+commonLabels: {}
+
+image:
+  repository: ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-syouyu
+  tag: ""
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+secrets:
+  # Production deployments should create this Secret out of band and leave
+  # create=false. The inline values exist for local and CI rendering only.
+  create: false
+  existingSecret: heterocloud-syouyu-secrets
+  annotations: {}
+  keys:
+    databaseUrl: database-url
+    providerPublicKeys: provider-public-keys.json
+    receiptEncryptionKey: receipt-encryption-key-base64
+    principalContextHmacSecret: principal-context-hmac-secret
+    garageRpcSecret: garage-rpc-secret
+    garageAdminToken: garage-admin-token
+    garageMetricsToken: garage-metrics-token
+  values:
+    databaseUrl: ""
+    providerPublicKeysJson: ""
+    receiptEncryptionKeyBase64: ""
+    principalContextHmacSecret: ""
+    garageRpcSecret: ""
+    garageAdminToken: ""
+    garageMetricsToken: ""
+
+api:
+  replicaCount: 3
+  bindAddress: 0.0.0.0:8080
+  service:
+    port: 8080
+    annotations: {}
+  logFilter: info
+  migrateOnStart: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  probes:
+    startup:
+      path: /health/live
+      periodSeconds: 2
+      failureThreshold: 30
+    readiness:
+      path: /health/ready
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 3
+    liveness:
+      path: /health/live
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 3
+  scheduling:
+    topologyKey: kubernetes.io/hostname
+    antiAffinity: preferred
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    topologySpread:
+      enabled: true
+      maxSkew: 1
+      whenUnsatisfiable: ScheduleAnyway
+  podAnnotations: {}
+  podLabels: {}
+  priorityClassName: ""
+  terminationGracePeriodSeconds: 30
+
+database:
+  # The complete connection URL is read from secrets.keys.databaseUrl.
+  # This port is used to constrain database egress in NetworkPolicy.
+  port: 5432
+  maxConnections: 20
+
+providerAuth:
+  issuer: heterocloud
+  audience: heterocloud-syouyu
+
+principalAuth:
+  issuer: heterocloud
+  audience: heterocloud-syouyu-data
+  maxTokenTtlSeconds: 300
+
+# Absolute process safety ceilings. HeteroCloud sends the lower tenant limits
+# in each signed principal context.
+credentialLimits:
+  maxPerBucket: 10000
+  maxPerOrganization: 1000000
+
+garage:
+  existingConfigMap: ""
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+  image:
+    repository: dxflrs/garage
+    tag: v2.3.0
+    pullPolicy: IfNotPresent
+  replicaCount: 3
+  config:
+    replicationFactor: 3
+    consistencyMode: consistent
+    region: heteronet-global
+    s3RootDomain: .s3.syouyu.internal
+    dbEngine: lmdb
+    blockSize: 1M
+    compressionLevel: 1
+    metadataFsync: true
+    dataFsync: true
+    metadataAutoSnapshotInterval: 6h
+    rpcBindAddress: "[::]:3901"
+    s3BindAddress: "[::]:3900"
+    adminBindAddress: "[::]:3903"
+    additionalConfig: ""
+  ports:
+    s3: 3900
+    rpc: 3901
+    admin: 3903
+  persistence:
+    meta:
+      storageClass: ""
+      size: 2Gi
+    data:
+      storageClass: ""
+      size: 10Gi
+  layout:
+    enabled: true
+    capacityBytesPerNode: 10000000000
+    zoneRedundancy: maximum
+    zones:
+      - storage-a
+      - storage-b
+      - storage-c
+    tags:
+      - syouyu
+  s3Service:
+    type: ClusterIP
+    port: 3900
+    publicEndpoint: ""
+    annotations: {}
+    labels: {}
+    externalTrafficPolicy: ""
+  adminService:
+    port: 3903
+    annotations: {}
+    sessionAffinity: ClientIP
+    sessionAffinityTimeoutSeconds: 10800
+  gateway:
+    enabled: false
+    annotations: {}
+    parentRefs: []
+    hostnames: []
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  probes:
+    startup:
+      periodSeconds: 2
+      failureThreshold: 60
+    readiness:
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 3
+    liveness:
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 3
+  scheduling:
+    topologyKey: kubernetes.io/hostname
+    antiAffinity: required
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    topologySpread:
+      enabled: true
+      maxSkew: 1
+      whenUnsatisfiable: DoNotSchedule
+  podAnnotations: {}
+  podLabels: {}
+  priorityClassName: ""
+  terminationGracePeriodSeconds: 60
+
+layoutBootstrap:
+  enabled: true
+  activeDeadlineSeconds: 600
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 300
+  waitIntervalSeconds: 5
+  requestTimeoutSeconds: 15
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+pdb:
+  api:
+    enabled: true
+    minAvailable: 2
+  garage:
+    enabled: true
+    minAvailable: 2
+
+monitoring:
+  serviceMonitor:
+    enabled: true
+    labels: {}
+    interval: 30s
+    scrapeTimeout: 10s
+    apiPath: /metrics
+    garagePath: /metrics
+
+networkPolicy:
+  enabled: true
+  dns:
+    namespaceSelector: {}
+    udpPort: 53
+    tcpPort: 53
+  apiIngress:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: heterocloud
+  monitoringIngress:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+  s3IngressCidrs:
+    - 0.0.0.0/0
+    - ::/0
+  kubernetesApiCidrs:
+    - 0.0.0.0/0
+    - ::/0
+  kubernetesApiPorts:
+    - 443
+    - 6443
+  database:
+    sameNamespace: false
+    podSelector: {}
+    peers:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: database
+    externalCidrs: []
+
+extraEnv: []

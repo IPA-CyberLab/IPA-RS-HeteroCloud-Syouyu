@@ -1,0 +1,119 @@
+{{- $garageName := include "syouyu.garageName" . -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $garageName }}-headless
+  labels:
+    {{- include "syouyu.labels" . | nindent 4 }}
+    app.kubernetes.io/component: garage
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "syouyu.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: garage
+  ports:
+    - name: rpc
+      port: {{ .Values.garage.ports.rpc }}
+      targetPort: rpc
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "syouyu.fullname" . }}-s3
+  labels:
+    {{- include "syouyu.labels" . | nindent 4 }}
+    app.kubernetes.io/component: s3
+    {{- with .Values.garage.s3Service.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.garage.s3Service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.garage.s3Service.type }}
+  {{- with .Values.garage.s3Service.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ . }}
+  {{- end }}
+  selector:
+    {{- include "syouyu.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: garage
+  ports:
+    - name: s3
+      port: {{ .Values.garage.s3Service.port }}
+      targetPort: s3
+      protocol: TCP
+      appProtocol: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $garageName }}-admin
+  labels:
+    {{- include "syouyu.labels" . | nindent 4 }}
+    app.kubernetes.io/component: garage-admin
+  {{- with .Values.garage.adminService.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  sessionAffinity: {{ .Values.garage.adminService.sessionAffinity }}
+  {{- if eq .Values.garage.adminService.sessionAffinity "ClientIP" }}
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: {{ .Values.garage.adminService.sessionAffinityTimeoutSeconds }}
+  {{- end }}
+  selector:
+    {{- include "syouyu.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: garage
+  ports:
+    - name: admin
+      port: {{ .Values.garage.adminService.port }}
+      targetPort: admin
+      protocol: TCP
+      appProtocol: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $garageName }}-admin-bootstrap
+  labels:
+    {{- include "syouyu.labels" . | nindent 4 }}
+    app.kubernetes.io/component: garage-admin-bootstrap
+spec:
+  type: ClusterIP
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "syouyu.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: garage
+    statefulset.kubernetes.io/pod-name: {{ $garageName }}-0
+  ports:
+    - name: admin
+      port: {{ .Values.garage.adminService.port }}
+      targetPort: admin
+      protocol: TCP
+      appProtocol: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $garageName }}-metrics
+  labels:
+    {{- include "syouyu.labels" . | nindent 4 }}
+    app.kubernetes.io/component: garage-metrics
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    {{- include "syouyu.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: garage
+  ports:
+    - name: metrics
+      port: {{ .Values.garage.ports.admin }}
+      targetPort: admin
+      protocol: TCP
+      appProtocol: http

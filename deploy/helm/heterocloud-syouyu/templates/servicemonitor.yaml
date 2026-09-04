@@ -1,0 +1,56 @@
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "syouyu.fullname" . }}-api
+  labels:
+    {{- include "syouyu.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      {{- include "syouyu.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  endpoints:
+    - port: http
+      path: {{ .Values.monitoring.serviceMonitor.apiPath }}
+      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout }}
+      scheme: http
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "syouyu.garageName" . }}
+  labels:
+    {{- include "syouyu.labels" . | nindent 4 }}
+    app.kubernetes.io/component: garage
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      {{- include "syouyu.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: garage-metrics
+  endpoints:
+    - port: metrics
+      path: {{ .Values.monitoring.serviceMonitor.garagePath }}
+      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout }}
+      scheme: http
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ include "syouyu.secretName" . }}
+          key: {{ .Values.secrets.keys.garageMetricsToken }}
+{{- end }}

@@ -1,0 +1,25 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "syouyu.fullname" . }}-garage-discovery
+  labels:
+    {{- include "syouyu.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["deuxfleurs.fr"]
+    resources: ["garagenodes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "syouyu.fullname" . }}-garage-discovery
+  labels:
+    {{- include "syouyu.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "syouyu.garageServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "syouyu.fullname" . }}-garage-discovery

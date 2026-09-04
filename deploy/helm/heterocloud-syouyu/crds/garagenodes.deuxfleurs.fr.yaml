@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Adapted from Garage v2.3.0 script/k8s/crd/garage.go.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: garagenodes.deuxfleurs.fr
+  annotations:
+    app.kubernetes.io/source: https://github.com/deuxfleurs-org/garage/tree/v2.3.0/script/k8s/crd
+spec:
+  conversion:
+    strategy: None
+  group: deuxfleurs.fr
+  names:
+    kind: GarageNode
+    listKind: GarageNodeList
+    plural: garagenodes
+    singular: garagenode
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          description: Garage node advertised through Kubernetes discovery.
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [address, hostname, port]
+              properties:
+                address:
+                  type: string
+                  format: ip
+                hostname:
+                  type: string
+                port:
+                  type: integer
+                  format: uint16
+                  minimum: 0
+      subresources: {}

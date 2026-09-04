@@ -1,0 +1,18 @@
+Syouyu API (cluster internal):
+  http://{{ include "syouyu.fullname" . }}-api.{{ .Release.Namespace }}.svc:{{ .Values.api.service.port }}
+
+S3 data plane (cluster internal):
+  http://{{ include "syouyu.fullname" . }}-s3.{{ .Release.Namespace }}.svc:{{ .Values.garage.s3Service.port }}
+
+Garage admin is intentionally ClusterIP-only. Do not expose:
+  {{ include "syouyu.garageName" . }}-admin.{{ .Release.Namespace }}.svc:{{ .Values.garage.adminService.port }}
+
+{{- if .Values.garage.gateway.enabled }}
+The S3 HTTPRoute is enabled for:
+{{- range .Values.garage.gateway.hostnames }}
+  https://{{ . }}
+{{- end }}
+{{- else }}
+No public Gateway route was created. Point an HTTPRoute at Service
+{{ include "syouyu.fullname" . }}-s3 when public S3 access is required.
+{{- end }}

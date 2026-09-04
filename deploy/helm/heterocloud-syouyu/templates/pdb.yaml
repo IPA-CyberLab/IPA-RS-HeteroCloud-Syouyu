@@ -1,0 +1,33 @@
+{{- if .Values.pdb.api.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "syouyu.fullname" . }}-api
+  labels:
+    {{- include "syouyu.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  minAvailable: {{ .Values.pdb.api.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "syouyu.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+{{- end }}
+{{- if and .Values.pdb.api.enabled .Values.pdb.garage.enabled }}
+---
+{{- end }}
+{{- if .Values.pdb.garage.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "syouyu.garageName" . }}
+  labels:
+    {{- include "syouyu.labels" . | nindent 4 }}
+    app.kubernetes.io/component: garage
+spec:
+  minAvailable: {{ .Values.pdb.garage.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "syouyu.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: garage
+{{- end }}

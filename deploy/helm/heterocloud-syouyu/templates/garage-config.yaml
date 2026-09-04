@@ -1,0 +1,44 @@
+{{- if not .Values.garage.existingConfigMap }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "syouyu.garageConfigName" . }}
+  labels:
+    {{- include "syouyu.labels" . | nindent 4 }}
+    app.kubernetes.io/component: garage
+data:
+  garage.toml: |-
+    metadata_dir = "/var/lib/garage/meta"
+    data_dir = "/var/lib/garage/data"
+    db_engine = {{ .Values.garage.config.dbEngine | quote }}
+    block_size = {{ .Values.garage.config.blockSize | quote }}
+    replication_factor = {{ .Values.garage.config.replicationFactor }}
+    consistency_mode = {{ .Values.garage.config.consistencyMode | quote }}
+    compression_level = {{ .Values.garage.config.compressionLevel }}
+    metadata_fsync = {{ .Values.garage.config.metadataFsync }}
+    data_fsync = {{ .Values.garage.config.dataFsync }}
+    metadata_auto_snapshot_interval = {{ .Values.garage.config.metadataAutoSnapshotInterval | quote }}
+    rpc_bind_addr = {{ .Values.garage.config.rpcBindAddress | quote }}
+    rpc_secret_file = "/run/secrets/syouyu/{{ .Values.secrets.keys.garageRpcSecret }}"
+    allow_world_readable_secrets = false
+
+    [kubernetes_discovery]
+    namespace = {{ .Release.Namespace | quote }}
+    service_name = {{ include "syouyu.garageName" . | quote }}
+    skip_crd = false
+
+    [s3_api]
+    api_bind_addr = {{ .Values.garage.config.s3BindAddress | quote }}
+    s3_region = {{ .Values.garage.config.region | quote }}
+    root_domain = {{ .Values.garage.config.s3RootDomain | quote }}
+
+    [admin]
+    api_bind_addr = {{ .Values.garage.config.adminBindAddress | quote }}
+    admin_token_file = "/run/secrets/syouyu/{{ .Values.secrets.keys.garageAdminToken }}"
+    metrics_token_file = "/run/secrets/syouyu/{{ .Values.secrets.keys.garageMetricsToken }}"
+    metrics_require_token = true
+    {{- with .Values.garage.config.additionalConfig }}
+
+    {{ . | nindent 4 }}
+    {{- end }}
+{{- end }}

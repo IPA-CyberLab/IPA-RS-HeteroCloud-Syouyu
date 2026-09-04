@@ -1,0 +1,146 @@
+{{- if and .Values.layoutBootstrap.enabled .Values.garage.layout.enabled }}
+{{- if lt (len .Values.garage.layout.zones) (int .Values.garage.replicaCount) }}
+{{- fail "garage.layout.zones must contain one zone for every Garage replica" }}
+{{- end }}
+{{- $desiredNodes := list -}}
+{{- $garageName := include "syouyu.garageName" . -}}
+{{- range $ordinal := until (int .Values.garage.replicaCount) -}}
+{{- $desiredNodes = append $desiredNodes (dict
+      "hostname" (printf "%s-%d" $garageName $ordinal)
+      "zone" (index $.Values.garage.layout.zones $ordinal)
+      "capacity" (int64 $.Values.garage.layout.capacityBytesPerNode)
+      "tags" (concat $.Values.garage.layout.tags (list (printf "ordinal-%d" $ordinal)))) -}}
+{{- end -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "syouyu.fullname" . }}-layout-bootstrap
+  labels:
+    {{- include "syouyu.labels" . | nindent 4 }}
+    app.kubernetes.io/component: layout-bootstrap
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.layoutBootstrap.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.layoutBootstrap.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: {{ .Values.layoutBootstrap.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "syouyu.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: layout-bootstrap
+    spec:
+      serviceAccountName: {{ include "syouyu.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        {{- include "syouyu.podSecurityContext" . | nindent 8 }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: bootstrap
+          image: {{ include "syouyu.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              admin_url="http://{{ $garageName }}-admin-bootstrap:{{ .Values.garage.adminService.port }}"
+              token="$(cat /run/secrets/syouyu/{{ .Values.secrets.keys.garageAdminToken }})"
+              attempts=$(({{ .Values.layoutBootstrap.activeDeadlineSeconds }} / {{ .Values.layoutBootstrap.waitIntervalSeconds }}))
+              status=""
+
+              while [ "$attempts" -gt 0 ]; do
+                status="$(curl --fail --silent --show-error \
+                  --connect-timeout {{ .Values.layoutBootstrap.requestTimeoutSeconds }} \
+                  --max-time {{ .Values.layoutBootstrap.requestTimeoutSeconds }} \
+                  -H "Authorization: Bearer ${token}" \
+                  "${admin_url}/v2/GetClusterStatus" 2>/dev/null || true)"
+                ready="$(printf '%s' "$status" | jq --argjson desired "$DESIRED_NODES_JSON" '
+                  [ $desired[] as $want
+                    | .nodes[]
+                    | select(.hostname == $want.hostname and .isUp == true)
+                  ] | length
+                ' 2>/dev/null || printf '0')"
+                if [ "$ready" -eq "{{ .Values.garage.replicaCount }}" ]; then
+                  break
+                fi
+                attempts=$((attempts - 1))
+                sleep {{ .Values.layoutBootstrap.waitIntervalSeconds }}
+              done
+
+              if [ "$attempts" -le 0 ]; then
+                echo "Garage did not report all desired nodes before the bootstrap deadline" >&2
+                exit 1
+              fi
+
+              changes="$(printf '%s' "$status" | jq -c --argjson desired "$DESIRED_NODES_JSON" '
+                [ $desired[] as $want
+                  | (.nodes[] | select(.hostname == $want.hostname and .isUp == true)) as $node
+                  | select(
+                      $node.role == null
+                      or ($node.role.capacity // -1) != $want.capacity
+                      or ($node.role.zone // "") != $want.zone
+                      or (($node.role.tags // [] | sort) != ($want.tags | sort))
+                    )
+                  | {
+                      id: $node.id,
+                      zone: $want.zone,
+                      capacity: $want.capacity,
+                      tags: $want.tags
+                    }
+                ]
+              ')"
+
+              if [ "$(printf '%s' "$changes" | jq 'length')" -eq 0 ]; then
+                echo "Garage layout already matches the requested three-node layout"
+                exit 0
+              fi
+
+              payload="$(jq -cn \
+                --argjson roles "$changes" \
+                --arg zone_redundancy {{ .Values.garage.layout.zoneRedundancy | quote }} \
+                '{parameters: {zoneRedundancy: $zone_redundancy}, roles: $roles}')"
+              curl --fail --silent --show-error \
+                --connect-timeout {{ .Values.layoutBootstrap.requestTimeoutSeconds }} \
+                --max-time {{ .Values.layoutBootstrap.requestTimeoutSeconds }} \
+                -X POST \
+                -H "Authorization: Bearer ${token}" \
+                -H "Content-Type: application/json" \
+                --data "$payload" \
+                "${admin_url}/v2/UpdateClusterLayout" >/dev/null
+
+              current_version="$(printf '%s' "$status" | jq -r '.layoutVersion')"
+              next_version=$((current_version + 1))
+              curl --fail --silent --show-error \
+                --connect-timeout {{ .Values.layoutBootstrap.requestTimeoutSeconds }} \
+                --max-time {{ .Values.layoutBootstrap.requestTimeoutSeconds }} \
+                -X POST \
+                -H "Authorization: Bearer ${token}" \
+                -H "Content-Type: application/json" \
+                --data "{\"version\":${next_version}}" \
+                "${admin_url}/v2/ApplyClusterLayout" >/dev/null
+              echo "Applied Garage layout version ${next_version}"
+          env:
+            - name: DESIRED_NODES_JSON
+              value: {{ $desiredNodes | toJson | quote }}
+          securityContext:
+            {{- include "syouyu.containerSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.layoutBootstrap.resources | nindent 12 }}
+          volumeMounts:
+            - name: garage-admin-token
+              mountPath: /run/secrets/syouyu
+              readOnly: true
+      volumes:
+        - name: garage-admin-token
+          secret:
+            secretName: {{ include "syouyu.secretName" . }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.secrets.keys.garageAdminToken }}
+                path: {{ .Values.secrets.keys.garageAdminToken }}
+{{- end }}

@@ -1,0 +1,14 @@
+apiVersion: v2
+name: heterocloud-syouyu
+description: HA S3-compatible object storage provider for HeteroCloud
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.29.0-0"
+home: https://github.com/IPA-CyberLab/IPA-RS-HeteroCloud-Syouyu
+sources:
+  - https://github.com/IPA-CyberLab/IPA-RS-HeteroCloud-Syouyu
+  - https://github.com/deuxfleurs-org/garage
+annotations:
+  artifacthub.io/license: MIT AND AGPL-3.0-only
+  artifacthub.io/category: storage

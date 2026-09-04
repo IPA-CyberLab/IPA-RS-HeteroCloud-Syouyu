@@ -1,0 +1,8 @@
+.DS_Store
+.git/
+.github/
+*.swp
+*.tmp
+*.tgz
+ci/
+scripts/
