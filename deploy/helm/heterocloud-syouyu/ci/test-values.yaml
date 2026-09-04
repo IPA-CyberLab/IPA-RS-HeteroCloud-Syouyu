@@ -40,6 +40,7 @@ garage:
 
 monitoring:
   serviceMonitor:
+    enabled: true
     labels:
       release: kube-prometheus-stack
 

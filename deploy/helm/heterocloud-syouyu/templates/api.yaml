@@ -118,9 +118,9 @@ spec:
                   name: {{ include "syouyu.secretName" . }}
                   key: {{ .Values.secrets.keys.principalContextHmacSecret }}
             - name: SYOUYU_MAX_CREDENTIALS_PER_BUCKET
-              value: {{ .Values.credentialLimits.maxPerBucket | quote }}
+              value: {{ printf "%d" (int64 .Values.credentialLimits.maxPerBucket) | quote }}
             - name: SYOUYU_MAX_TOTAL_CREDENTIALS
-              value: {{ .Values.credentialLimits.maxPerOrganization | quote }}
+              value: {{ printf "%d" (int64 .Values.credentialLimits.maxPerOrganization) | quote }}
             - name: GARAGE_ADMIN_ENDPOINT
               value: {{ printf "http://%s-garage-admin:%v" (include "syouyu.fullname" .) .Values.garage.adminService.port | quote }}
             - name: GARAGE_ADMIN_TOKEN

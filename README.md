@@ -13,7 +13,6 @@ billing, or IAM policy.
 | `syouyu-api` | Authenticated provider reconciliation and storage management API |
 | PostgreSQL | Durable tenant, bucket, access-key metadata, operations, and audit state |
 | Garage | Upstream distributed S3-compatible object data plane |
-| Syouyu CSI integration | Optional object or workspace mounts for Flash services |
 | Prometheus and Grafana | Capacity, request, latency, repair, and durability monitoring |
 
 Syouyu does not reimplement the S3 data plane. Garage is an independently

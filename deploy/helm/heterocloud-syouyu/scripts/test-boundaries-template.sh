@@ -16,6 +16,11 @@ grep -q 'name: syouyu-heterocloud-syouyu-garage-admin' "$rendered"
 grep -q 'name: syouyu-heterocloud-syouyu-garage-admin-bootstrap' "$rendered"
 grep -q '^kind: ServiceMonitor$' "$rendered"
 grep -q 'authorization:' "$rendered"
+grep -A1 'name: SYOUYU_MAX_TOTAL_CREDENTIALS' "$rendered" | grep -q 'value: "1000000"'
+if grep -q '1e+06' "$rendered"; then
+  echo "credential limits must render as decimal integers" >&2
+  exit 1
+fi
 
 if grep -Eq '^  type: (LoadBalancer|NodePort)$' "$rendered"; then
   echo "Syouyu management and Garage admin must not be externally exposed" >&2
