@@ -153,7 +153,9 @@ spec:
               - key: {{ .Values.secrets.keys.garageMetricsToken }}
                 path: {{ .Values.secrets.keys.garageMetricsToken }}
   volumeClaimTemplates:
-    - metadata:
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
         name: meta
         labels:
           {{- include "syouyu.selectorLabels" . | nindent 10 }}
@@ -167,7 +169,9 @@ spec:
         resources:
           requests:
             storage: {{ .Values.garage.persistence.meta.size | quote }}
-    - metadata:
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
         name: data
         labels:
           {{- include "syouyu.selectorLabels" . | nindent 10 }}
