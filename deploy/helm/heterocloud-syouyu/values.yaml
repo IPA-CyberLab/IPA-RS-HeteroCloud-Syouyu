@@ -83,7 +83,8 @@ api:
 
 database:
   # The complete connection URL is read from secrets.keys.databaseUrl.
-  # This port is used to constrain database egress in NetworkPolicy.
+  # NetworkPolicy egress port: use the database Service targetPort, which may
+  # differ from the frontend port in the connection URL.
   port: 5432
   maxConnections: 20
 
