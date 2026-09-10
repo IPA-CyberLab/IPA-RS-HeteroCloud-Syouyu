@@ -112,6 +112,8 @@ garage:
   image:
     repository: dxflrs/garage
     tag: v2.3.0
+    # Pin the independently verified v2.3.0 artifact; overrides tag in the image reference.
+    digest: ""
     pullPolicy: IfNotPresent
   replicaCount: 3
   config:
