@@ -15,6 +15,8 @@ concurrency:
 env:
   IMAGE: ghcr.io/ipa-cyberlab/ipa-rs-heterocloud-syouyu
   CHART: deploy/helm/heterocloud-syouyu
+  RELEASE_TAG: ${{ github.event.release.tag_name }}
+  RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
 
 jobs:
   verify:
@@ -38,15 +40,19 @@ jobs:
       TEST_DATABASE_URL: postgres://syouyu:syouyu-ci-password@127.0.0.1:5432/syouyu?sslmode=disable
     steps:
       - uses: actions/checkout@v4
-      - name: Validate release tag
-        shell: bash
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Validate release identity and artifact contract
         run: |
-          set -Eeuo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
-            echo "release tag must be SemVer, for example v0.1.0" >&2
-            exit 1
-          fi
+          python3 -m unittest discover -s scripts/tests -p test_release_artifact.py -v
+          python3 scripts/release_artifact.py validate
+      - name: Refuse an already published channel artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$RELEASE_TAG" --json assets > "$RUNNER_TEMP/release-assets.json"
+          python3 -c 'import json,os; from pathlib import Path; assets=json.loads((Path(os.environ["RUNNER_TEMP"])/"release-assets.json").read_text())["assets"]; assert not any(a["name"] == "syouyu-release-artifact.json" for a in assets), "channel artifact already published"'
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.96.1
@@ -115,6 +121,12 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Verify release identity
+        id: release
+        run: python3 scripts/release_artifact.py validate >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -125,12 +137,17 @@ jobs:
         id: metadata
         with:
           images: ${{ env.IMAGE }}
+          flavor: latest=false
           tags: |
-            type=semver,pattern={{version}},suffix=-${{ matrix.arch }}
+            type=raw,value=${{ steps.release.outputs.version }}-${{ matrix.arch }}
           labels: |
             org.opencontainers.image.title=HeteroCloud Syouyu
             org.opencontainers.image.description=Managed S3-compatible storage control plane for HeteroCloud
+            org.opencontainers.image.version=${{ steps.release.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            io.heterocloud.cargo-version=${{ steps.release.outputs.cargo_version }}
       - uses: docker/build-push-action@v6
+        id: build
         with:
           context: .
           platforms: ${{ matrix.platform }}
@@ -141,12 +158,33 @@ jobs:
           cache-to: type=gha,mode=max,scope=syouyu-${{ matrix.arch }}
           provenance: true
           sbom: true
+      - name: Export immutable architecture result
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: python3 scripts/release_artifact.py generate > "$RUNNER_TEMP/${{ matrix.arch }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-${{ matrix.arch }}
+          path: ${{ runner.temp }}/${{ matrix.arch }}.json
+          if-no-files-found: error
 
   manifest:
     name: Publish multi-architecture image
     needs: image
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Verify release identity
+        id: release
+        run: python3 scripts/release_artifact.py validate >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: image-*
+          path: dist/digests
+          merge-multiple: true
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -155,23 +193,34 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish manifest
         shell: bash
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          LATEST: ${{ steps.release.outputs.latest }}
         run: |
           set -Eeuo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          docker buildx imagetools create \
-            --tag "$IMAGE:$version" \
-            --tag "$IMAGE:$GITHUB_REF_NAME" \
-            --tag "$IMAGE:latest" \
-            "$IMAGE:$version-amd64" \
-            "$IMAGE:$version-arm64"
+          python3 scripts/release_artifact.py sources dist/digests/amd64.json dist/digests/arm64.json > "$RUNNER_TEMP/image-sources"
+          mapfile -t sources < "$RUNNER_TEMP/image-sources"
+          tags=(--tag "$IMAGE:$VERSION")
+          if [[ "$RELEASE_TAG" != "$VERSION" ]]; then tags+=(--tag "$IMAGE:$RELEASE_TAG"); fi
+          if [[ "$LATEST" == true ]]; then
+            tags+=(--tag "$IMAGE:latest")
+          fi
+          docker buildx imagetools create "${tags[@]}" \
+            --metadata-file "$RUNNER_TEMP/manifest-metadata.json" "${sources[@]}"
+          python3 scripts/release_artifact.py generate --metadata "$RUNNER_TEMP/manifest-metadata.json" > "$RUNNER_TEMP/syouyu-release-artifact.json"
       - name: Verify manifest platforms
         shell: bash
         run: |
           set -Eeuo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          inspect="$(docker buildx imagetools inspect "$IMAGE:$version")"
+          image="$(python3 -c 'import json,os; from pathlib import Path; print(json.loads((Path(os.environ["RUNNER_TEMP"])/"syouyu-release-artifact.json").read_text())["image"])')"
+          inspect="$(docker buildx imagetools inspect "$image")"
           grep -q 'linux/amd64' <<<"$inspect"
           grep -q 'linux/arm64' <<<"$inspect"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: channel-artifact
+          path: ${{ runner.temp }}/syouyu-release-artifact.json
+          if-no-files-found: error
 
   publish-chart:
     name: Attach Helm chart
@@ -182,6 +231,12 @@ jobs:
         with:
           name: helm-chart
           path: dist
-      - uses: softprops/action-gh-release@v2
+      - uses: actions/download-artifact@v4
         with:
-          files: dist/*.tgz
+          name: channel-artifact
+          path: dist
+      - name: Attach chart and immutable channel artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "$RELEASE_TAG" dist/*.tgz dist/syouyu-release-artifact.json
