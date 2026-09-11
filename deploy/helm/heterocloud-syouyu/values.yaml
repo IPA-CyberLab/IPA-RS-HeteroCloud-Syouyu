@@ -81,6 +81,11 @@ api:
   priorityClassName: ""
   terminationGracePeriodSeconds: 30
 
+# Namespace-local PEM CA Secret. The database URL must use sslmode=verify-full.
+databaseTls:
+  caSecretName: ""
+  caSecretKey: ca.crt
+
 database:
   # The complete connection URL is read from secrets.keys.databaseUrl.
   # NetworkPolicy egress port: use the database Service targetPort, which may

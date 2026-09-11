@@ -81,6 +81,7 @@ spec:
               containerPort: {{ .Values.api.service.port }}
               protocol: TCP
           env:
+            {{- include "syouyu.databaseTlsEnv" . | nindent 12 }}
             - name: SYOUYU_BIND_ADDR
               value: {{ .Values.api.bindAddress | quote }}
             - name: DATABASE_URL
