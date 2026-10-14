@@ -11,7 +11,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     install -D -m 0755 target/release/syouyu-api /output/syouyu-api
 
 FROM debian:bookworm-slim AS runtime
+COPY --from=builder /source/Cargo.lock /usr/share/heterocloud/Cargo.lock
 RUN apt-get update && \
+    apt-get upgrade -y && \
     apt-get install -y --no-install-recommends ca-certificates curl jq && \
     rm -rf /var/lib/apt/lists/* && \
     useradd --system --uid 65532 --home-dir /nonexistent --shell /usr/sbin/nologin syouyu
