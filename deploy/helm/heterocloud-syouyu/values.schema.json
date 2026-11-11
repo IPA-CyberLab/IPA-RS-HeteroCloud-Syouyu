@@ -280,7 +280,7 @@
       "additionalProperties": false,
       "required": ["enabled", "activeDeadlineSeconds", "backoffLimit", "ttlSecondsAfterFinished", "waitIntervalSeconds", "requestTimeoutSeconds", "resources"],
       "properties": {
-        "enabled": { "const": true },
+        "enabled": { "type": "boolean" },
         "activeDeadlineSeconds": { "type": "integer", "minimum": 30 },
         "backoffLimit": { "type": "integer", "minimum": 0 },
         "ttlSecondsAfterFinished": { "type": "integer", "minimum": 0 },

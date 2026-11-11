@@ -28,6 +28,22 @@ grep -q 'name: meta$' "$rendered"
 grep -q 'name: data$' "$rendered"
 grep -q 'minAvailable: 2' "$rendered"
 
+# Administrators can temporarily pause layout reconciliation while replacing
+# a lost physical node. The Garage StatefulSet must remain present.
+helm template syouyu "$chart_dir" \
+  --namespace heterocloud-syouyu \
+  -f "$chart_dir/ci/test-values.yaml" \
+  --set layoutBootstrap.enabled=false >"$rendered"
+grep -q '^kind: StatefulSet$' "$rendered"
+python3 - "$rendered" <<'PY'
+import sys
+import yaml
+documents = yaml.safe_load_all(open(sys.argv[1], encoding="utf-8"))
+assert not any(obj and obj.get("kind") == "Job" and
+               obj.get("metadata", {}).get("labels", {}).get("app.kubernetes.io/component") == "layout-bootstrap"
+               for obj in documents), "layout bootstrap must not run while explicitly disabled"
+PY
+
 # Synthetic test digest only; no image is pulled or deployed.
 digest="sha256:$(printf 'a%.0s' {1..64})"
 helm template syouyu "$chart_dir" \
