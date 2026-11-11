@@ -28,6 +28,15 @@ grep -q 'name: meta$' "$rendered"
 grep -q 'name: data$' "$rendered"
 grep -q 'minAvailable: 2' "$rendered"
 
+# An installation with two physical workers can keep two API replicas.
+helm template syouyu "$chart_dir" --namespace heterocloud-syouyu \
+  -f "$chart_dir/ci/test-values.yaml" --set api.replicaCount=2 >"$rendered"
+if helm template syouyu "$chart_dir" \
+  -f "$chart_dir/ci/test-values.yaml" --set api.replicaCount=1 >"$rendered" 2>&1; then
+  echo "a single Syouyu API replica was accepted" >&2
+  exit 1
+fi
+
 helm template syouyu "$chart_dir" --namespace heterocloud-syouyu \
   -f "$chart_dir/ci/test-values.yaml" --set garage.updateStrategy=OnDelete >"$rendered"
 python3 - "$rendered" <<'PY'

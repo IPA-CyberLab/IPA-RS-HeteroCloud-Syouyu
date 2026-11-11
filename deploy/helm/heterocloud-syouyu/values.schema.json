@@ -78,7 +78,7 @@
       "additionalProperties": false,
       "required": ["replicaCount", "bindAddress", "service", "resources", "probes", "scheduling"],
       "properties": {
-        "replicaCount": { "type": "integer", "minimum": 3 },
+        "replicaCount": { "type": "integer", "minimum": 2 },
         "bindAddress": { "type": "string", "minLength": 1 },
         "service": {
           "type": "object",
