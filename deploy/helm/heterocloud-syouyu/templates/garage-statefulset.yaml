@@ -28,7 +28,7 @@ spec:
   serviceName: {{ $garageName }}-headless
   podManagementPolicy: Parallel
   updateStrategy:
-    type: RollingUpdate
+    type: {{ .Values.garage.updateStrategy | default "RollingUpdate" }}
   selector:
     matchLabels:
       {{- include "syouyu.selectorLabels" . | nindent 6 }}

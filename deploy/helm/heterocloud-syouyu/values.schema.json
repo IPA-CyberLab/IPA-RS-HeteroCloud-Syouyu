@@ -142,6 +142,7 @@
       "additionalProperties": false,
       "required": ["serviceAccount", "image", "replicaCount", "config", "ports", "persistence", "layout", "s3Service", "adminService", "gateway", "resources", "probes", "scheduling", "podSecurityContext", "securityContext"],
       "properties": {
+        "updateStrategy": { "enum": ["RollingUpdate", "OnDelete"] },
         "existingConfigMap": { "type": "string" },
         "serviceAccount": { "$ref": "#/definitions/serviceAccount" },
         "image": {

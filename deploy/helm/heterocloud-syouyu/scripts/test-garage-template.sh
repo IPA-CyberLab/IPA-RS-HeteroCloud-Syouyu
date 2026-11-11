@@ -28,6 +28,16 @@ grep -q 'name: meta$' "$rendered"
 grep -q 'name: data$' "$rendered"
 grep -q 'minAvailable: 2' "$rendered"
 
+helm template syouyu "$chart_dir" --namespace heterocloud-syouyu \
+  -f "$chart_dir/ci/test-values.yaml" --set garage.updateStrategy=OnDelete >"$rendered"
+python3 - "$rendered" <<'PY'
+import sys
+import yaml
+documents = list(yaml.safe_load_all(open(sys.argv[1], encoding="utf-8")))
+garage = next(obj for obj in documents if obj and obj.get("kind") == "StatefulSet")
+assert garage["spec"]["updateStrategy"]["type"] == "OnDelete"
+PY
+
 # Administrators can temporarily pause layout reconciliation while replacing
 # a lost physical node. The Garage StatefulSet must remain present.
 helm template syouyu "$chart_dir" \

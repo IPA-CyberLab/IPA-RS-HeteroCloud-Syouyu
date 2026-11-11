@@ -109,6 +109,8 @@ credentialLimits:
   maxPerOrganization: 1000000
 
 garage:
+  # Recovery can temporarily use OnDelete to avoid restarting healthy peers.
+  updateStrategy: RollingUpdate
   existingConfigMap: ""
   serviceAccount:
     create: true
