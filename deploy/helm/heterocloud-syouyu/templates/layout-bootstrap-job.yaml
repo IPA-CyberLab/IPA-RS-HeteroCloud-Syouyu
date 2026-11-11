@@ -1,4 +1,7 @@
 {{- if and .Values.layoutBootstrap.enabled .Values.garage.layout.enabled }}
+{{- if lt (len (uniq .Values.garage.layout.zones)) 2 }}
+{{- fail "garage.layout.zones must contain at least two distinct failure domains" }}
+{{- end }}
 {{- if lt (len .Values.garage.layout.zones) (int .Values.garage.replicaCount) }}
 {{- fail "garage.layout.zones must contain one zone for every Garage replica" }}
 {{- end }}

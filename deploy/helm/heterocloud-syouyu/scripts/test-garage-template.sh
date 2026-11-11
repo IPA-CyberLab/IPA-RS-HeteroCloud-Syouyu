@@ -44,6 +44,23 @@ assert not any(obj and obj.get("kind") == "Job" and
                for obj in documents), "layout bootstrap must not run while explicitly disabled"
 PY
 
+# Multiple replicas can share one physical failure domain, but the chart
+# must keep at least two distinct domains and report their true placement.
+helm template syouyu "$chart_dir" \
+  -f "$chart_dir/ci/test-values.yaml" \
+  --set 'garage.layout.zones[0]=zone-a' \
+  --set 'garage.layout.zones[1]=zone-b' \
+  --set 'garage.layout.zones[2]=zone-b' >"$rendered"
+if helm template syouyu "$chart_dir" \
+  -f "$chart_dir/ci/test-values.yaml" \
+  --set 'garage.layout.zones[0]=zone-a' \
+  --set 'garage.layout.zones[1]=zone-a' \
+  --set 'garage.layout.zones[2]=zone-a' >"$rendered" 2>&1; then
+  echo "a single Garage failure domain was accepted" >&2
+  exit 1
+fi
+grep -q 'at least two distinct failure domains' "$rendered"
+
 # Synthetic test digest only; no image is pulled or deployed.
 digest="sha256:$(printf 'a%.0s' {1..64})"
 helm template syouyu "$chart_dir" \
